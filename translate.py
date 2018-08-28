@@ -1,12 +1,10 @@
 ''' Translate input text with trained model. '''
 
 import torch
-import torch.utils.data
 import argparse
 from tqdm import tqdm
-
-from dataset import collate_fn, TranslationDataset
 from transformer.Translator import Translator
+from DataLoader import DataLoader
 from preprocess import read_instances_from_file, convert_instance_to_idx_seq
 
 def main():
@@ -44,26 +42,25 @@ def main():
         preprocess_settings.keep_case)
     test_src_insts = convert_instance_to_idx_seq(
         test_src_word_insts, preprocess_data['dict']['src'])
-
-    test_loader = torch.utils.data.DataLoader(
-        TranslationDataset(
-            src_word2idx=preprocess_data['dict']['src'],
-            tgt_word2idx=preprocess_data['dict']['tgt'],
-            src_insts=test_src_insts),
-        num_workers=2,
-        batch_size=opt.batch_size,
-        collate_fn=collate_fn)
+    test_data = DataLoader(
+        preprocess_data['dict']['src'],
+        preprocess_data['dict']['tgt'],
+        src_insts=test_src_insts,
+        cuda=opt.cuda,
+        shuffle=False,
+        batch_size=opt.batch_size)
 
     translator = Translator(opt)
     translator.model.eval()
 
-    with open(opt.output, 'w') as f:
-        for batch in tqdm(test_loader, mininterval=2, desc='  - (Test)', leave=False):
-            all_hyp, all_scores = translator.translate_batch(*batch)
+    with open(opt.output, 'wb') as f:
+        for batch in tqdm(test_data, mininterval=2, desc='  - (Test)', leave=False):
+            all_hyp, all_scores = translator.translate_batch(batch)
             for idx_seqs in all_hyp:
                 for idx_seq in idx_seqs:
-                    pred_line = ' '.join([test_loader.dataset.tgt_idx2word[idx] for idx in idx_seq])
-                    f.write(pred_line + '\n')
+                    pred_line = ' '.join([test_data.tgt_idx2word[idx] for idx in idx_seq]) + '\n'
+                    pred_line = pred_line.encode('utf-8')
+                    f.write(pred_line)
     print('[Info] Finished.')
 
 if __name__ == "__main__":

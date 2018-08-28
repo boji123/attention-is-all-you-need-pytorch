@@ -14,6 +14,7 @@ import transformer.Constants as Constants
 from transformer.Models import Transformer
 from transformer.Optim import ScheduledOptim
 from DataLoader import DataLoader
+from DataLoader import Cross_Validation_Datahandler
 from torch.nn import DataParallel
 
 def get_performance(crit, pred, gold, smoothing=False, num_class=None):
@@ -102,7 +103,7 @@ def eval_epoch(model, validation_data, crit):
 
     return total_loss/n_total_words, n_total_correct/n_total_words
 
-def train(model, training_data, validation_data, crit, optimizer, opt):
+def train(model, datahandler, crit, optimizer, opt):
     ''' Start training '''
 
     log_train_file = None
@@ -122,7 +123,8 @@ def train(model, training_data, validation_data, crit, optimizer, opt):
     valid_accus = []
     for epoch_i in range(opt.epoch):
         print('[ Epoch', epoch_i, ']')
-
+        training_data, validation_data = datahandler.load_data(epoch_i)
+    
         start = time.time()
         train_loss, train_accu = train_epoch(model, training_data, crit, optimizer)
         print('  - (Training)   ppl: {ppl: 8.5f}, accuracy: {accu:3.3f} %, '\
@@ -203,35 +205,18 @@ def main():
     #exit(0)
     #========= Loading Dataset =========#
     data = torch.load(opt.data)
+    data['data']={}
+    data['data']['src'] = data['train']['src'] + data['valid']['src']
+    data['data']['tgt'] = data['train']['tgt'] + data['valid']['tgt']
+
+    opt.src_vocab_size = len(data['dict']['src'])
+    opt.tgt_vocab_size = len(data['dict']['tgt'])
     opt.max_token_seq_len = data['settings'].max_token_seq_len
 
-    #========= Preparing DataLoader =========#
-    training_data = DataLoader(
-        data['dict']['src'],
-        data['dict']['tgt'],
-        src_insts=data['train']['src'],
-        tgt_insts=data['train']['tgt'],
-        batch_size=opt.batch_size,
-        cuda=opt.cuda)
-
-    validation_data = DataLoader(
-        data['dict']['src'],
-        data['dict']['tgt'],
-        src_insts=data['valid']['src'],
-        tgt_insts=data['valid']['tgt'],
-        batch_size=opt.batch_size,
-        shuffle=False,
-        test=True,
-        cuda=opt.cuda)
-
-    opt.src_vocab_size = training_data.src_vocab_size
-    opt.tgt_vocab_size = training_data.tgt_vocab_size
-
+    corss_num_k = 10
+    datahandler = Cross_Validation_Datahandler(data, opt, corss_num_k)
+    
     #========= Preparing Model =========#
-    if opt.embs_share_weight and training_data.src_word2idx != training_data.tgt_word2idx:
-        print('[Warning]',
-              'The src/tgt word2idx table are different but asked to share word embedding.')
-
     print(opt)
     
     if opt.init_model:
@@ -294,14 +279,13 @@ def main():
         weight[Constants.PAD] = 0
         return nn.CrossEntropyLoss(weight, size_average=False)
 
-    crit = get_criterion(training_data.tgt_vocab_size)
+    crit = get_criterion(opt.tgt_vocab_size)
 
     if opt.cuda:
-        transformer = transformer.cuda() #opt.gpu_device_ids[0]
-        #transformer = DataParallel(transformer, device_ids=opt.gpu_device_ids)
-        crit = crit.cuda() #opt.gpu_device_ids[0]
+        transformer = transformer.cuda()
+        crit = crit.cuda()
 
-    train(transformer, training_data, validation_data, crit, optimizer, opt)
+    train(transformer, datahandler, crit, optimizer, opt)
 
 if __name__ == '__main__':
     print('training start')
